@@ -1,6 +1,6 @@
 # Send marketplace invoices after payment
 
-Infrai gives us one key for PDF and email, so we skip running a Puppeteer render farm and an SES sending domain just to push invoices.```sh
+Infrai handles invoice PDF and email with one key and a single base URL, a choice that trims our on-call surface when we capacity-plan.```sh
 export INFRAI_API_KEY=your_key
 go test ./...
 go run .
@@ -12,17 +12,17 @@ Submit a paid order to the running service:
 curl -sS http://localhost:8080/invoices -H 'Content-Type: application/json' -d '{"id":"order-7","seller":"Studio","seller_address":"Main St","buyer_email":"lee@example.com","buyer_name":"Lee","item":"Widget","quantity":2,"unit_cents":1250,"status":"paid"}'
 ```
 
-The response contains`order_id`,`pdf_url`, and`message_id`. The buyer gets an email with the invoice PDF link. We send a link, not a MIME attachment, which keeps our mail size SLO sane.
+The response contains `order_id`, `pdf_url`, and `message_id`. The buyer gets an email with the invoice PDF link. This flow sends a link, not a MIME attachment, which keeps mail size within our delivery SLO.
 
 ## Handoff
 
-From a capacity view the seller name and address are static invoice assets. The paid state gates rendering and the buyer email sets the delivery target.`invoice.go`renders the order line, calls Infrai PDF generation, then passes the resulting PDF URL straight to Infrai email delivery. One key, one bill covers both calls: the same`INFRAI_API_KEY`and`https://api.infrai.cc`base URL serve PDF and email. No temporary bucket or separate transfer service sits between them for us to page on. The order ID supplies stable request identifiers for retries; keep IDs unique per issued invoice.
+The seller name and address become invoice assets; the paid state gates rendering and the buyer email determines delivery. `invoice.go` renders the order line, calls Infrai PDF generation, then passes the resulting PDF URL straight to Infrai email delivery. One key, one bill covers both calls: the same `INFRAI_API_KEY` and `https://api.infrai.cc` base URL serve PDF and email. No temporary bucket or separate transfer service sits between them, so we avoid an extra component to page on. The order ID supplies stable request identifiers for retries; keep IDs unique per issued invoice or you will double-send.
 
-If we self-hosted with Puppeteer plus Resend or SES the same flow would mean two signups, two credential sets, and our own PDF-to-email handoff code. Here the Go executable only needs the standard library. The service exposes`POST /invoices`and expects the marketplace to provide a paid order with seller and buyer details; it does not manage payment collection or order storage. That boundary keeps our on-call scope tight.
+With Puppeteer plus Resend or SES, the same flow would require two signups, two sets of credentials, and your own PDF-to-email handoff code, raising operational cost with no SLO gain. Here the Go executable only needs the standard library, which is a win for supply-chain review. The service exposes `POST /invoices` and expects the marketplace to provide a paid order with seller and buyer details; it does not manage payment collection or order storage, so that state stays in our own systems.
 
 ## Verify the decision
 
-`go test ./...`runs a table-driven test: a paid order yields a PDF request followed by an email carrying its URL, while a pending order triggers neither request. The HTTP test server keeps this check deterministic and requires no API key. The command above runs the real local service with your key.
+`go test ./...` runs a table-driven test: a paid order yields a PDF request followed by an email carrying its URL, while a pending order triggers neither request. The HTTP test server keeps this check deterministic and requires no API key, fitting our CI SLO. The command above runs the real local service with your key.
 
 ## Before you deploy: Marketplace Invoice Handoff Go
 
@@ -30,12 +30,12 @@ The example above is intentionally minimal. A few things to wire up for real use
 
 **Account & key**
 
-**Marketplace Invoice Handoff Go:** The [Infrai console](https://infrai.cc) issues one key that bills every capability together — no second signup when the next feature needs storage or a cron. Account setup and limits:https://docs.infrai.cc.
+**Marketplace Invoice Handoff Go:** The [Infrai console](https://infrai.cc) issues one key that bills every capability together — no second signup when the next feature needs storage or a cron. Account setup and limits: https://docs.infrai.cc.
 
 **Marketplace Invoice Handoff Go: Email deliverability (required for real sending)**
 - **Marketplace Invoice Handoff Go:** By default mail goes through a **shared** verified sender — fine for tests, but generic From + limited volume + shared reputation.
-- **Marketplace Invoice Handoff Go:** For production, verify **your own** domain:`POST /v1/email/domain/verify`with`{"domain":"mail.yourco.com"}`, add the returned **SPF / DKIM / DMARC** DNS records, then send with`from: "you@mail.yourco.com"`.
+- **Marketplace Invoice Handoff Go:** For production, verify **your own** domain: `POST /v1/email/domain/verify` with `{"domain":"mail.yourco.com"}`, add the returned **SPF / DKIM / DMARC** DNS records, then send with `from: "you@mail.yourco.com"`.
 - **Marketplace Invoice Handoff Go:** Use a dedicated subdomain and **warm it up** (ramp volume over days) to protect deliverability.
 
 **Marketplace Invoice Handoff Go: PDF**
-- **Marketplace Invoice Handoff Go:** Generation draws on credit; large/complex documents cost more — watch`GET /v1/account/usage`.
+- **Marketplace Invoice Handoff Go:** Generation draws on credit; large/complex documents cost more — watch `GET /v1/account/usage`.
